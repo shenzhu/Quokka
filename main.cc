@@ -2,6 +2,7 @@
 
 #include "util/StringView.h"
 #include "util/TimeUtil.h"
+#include "util/Timer.h"
 
 int main() {
 	Quokka::StringView sv("Hello", 5);
