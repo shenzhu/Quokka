@@ -56,6 +56,17 @@ public:
 	template<typename Duration, typename F, typename... Args>
 	TimerId scheduleAfter(const Duration& duration, F&& f, Args&&... args);
 
+	/*
+	* How far the nearest timer will be trigger.
+	*/
+	std::chrono::milliseconds nearestTimer() const;
+
+	/*
+	* Cancel timer
+	* @param @id : Id of timer
+	*/
+	bool cancel(TimerId id);
+
 private:
 
 	class Timer {
@@ -66,8 +77,8 @@ private:
 		explicit Timer(const TimePoint& tp);
 
 		// Move only
-		Timer(Timer&& rhs);
-		Timer& operator=(Timer&& rhs);
+		Timer(Timer&& rhs) noexcept;
+		Timer& operator=(Timer&& rhs) noexcept;
 
 		// Delete copy operations
 		Timer(const Timer& rhs) = delete;

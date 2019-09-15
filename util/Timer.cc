@@ -77,19 +77,52 @@ TimerId TimerManager::scheduleAfter(const Duration& duration, F&& f, Args&& ... 
 		std::forward<Args>(args));
 }
 
+bool TimerManager::cancel(TimerId id) {
+	// Find in multimap(timers_) all the records whose key equals to
+	// id->first(std::chrono::steady_clock::time_point)
+	auto begin = timers_.lower_bound(id->first);
+	if (begin == timers_.end()) return false;
+
+	auto end = timers_.upper_bound(id->first);
+
+	for (auto it = begin; it != end; ++it) {
+		if (it->second.uniqueId() == id->second) {
+			it->second.count_ = 0;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+std::chrono::milliseconds TimerManager::nearestTimer() const {
+	if (timers_.empty()) return std::chrono::milliseconds::max();
+
+	const auto& timer = timers_.begin()->second;
+	auto now = std::chrono::steady_clock::now();
+
+	if (now > timer.id()->first) {
+		return std::chrono::milliseconds::min();
+	}
+	else {
+		return std::chrono::duration_cast<std::chrono::milliseconds>(timer.id()->first - now);
+	}
+}
+
 TimerManager::Timer::Timer(const TimePoint& tp) :
 	id_(std::make_shared<std::pair<TimePoint, unsigned int>>(tp, ++TimerManager::s_timerIdGen_)),
+	interval_(0),
 	count_(kForever) {
 }
 
-TimerManager::Timer::Timer(Timer&& rhs) :
+TimerManager::Timer::Timer(Timer&& rhs) noexcept:
 	id_(std::move(rhs.id_)),
 	func_(std::move(rhs.func_)),
 	interval_(std::move(rhs.interval_)),
 	count_(rhs.count_) {
 }
 
-TimerManager::Timer& TimerManager::Timer::operator=(Timer&& rhs) {
+TimerManager::Timer& TimerManager::Timer::operator=(Timer&& rhs) noexcept {
 	if (this != &rhs) {
 		id_ = std::move(rhs.id_);
 		func_ = std::move(rhs.func_);
