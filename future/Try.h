@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <cassert>
 #include <exception>
@@ -195,8 +195,13 @@ public:
 private:
 
 	State state_;
+
+	// A union is a special class type that can hold only one of its non-static
+	// data members at a time
 	union {
 		T value_;
+		// std::exception_ptr is a nullable pointer-like type that manages an
+		// exception object which has been thrown and captured with std::current_exception.
 		std::exception_ptr exception_;
 	};
 };
@@ -329,16 +334,33 @@ private:
 };
 
 // TryWrapper<T>: If T is Try type, then Type is T otherwise Try<T>
+/*
+相对于下面模板比较general，当T不是一个被Try包裹的类型的时候会匹配这个模板
+在里面定义了Type = Try<T>，所以Type是一个被Try包裹的类型
+总的来说，被TryWrapper包裹的类型里面都会有一个叫做Type的type alias，而这个
+Type代表被Try struct包裹的类型T
+*/
 template<typename T>
 struct TryWrapper {
 	using Type = Try<T>;
 };
 
+/*
+相对于上面的模板更加特化，所以如果T是一个被Try包裹的type的话，那么会优先匹配这个类型
+被匹配之后，T是被Try包裹的真正的类型
+在里面又有一个type alias定义了Type，是一个Try struct包裹真正的类型
+*/
 template<typename T>
 struct TryWrapper<Try<T>> {
 	using Type = Try<T>;
 };
 
+/*
+Wrap function f(...) return by Try<T>
+
+先从里面的typename定义看起
+typename std::result_of<F(Args...)>::type
+*/
 template<typename F, typename... Args>
 typename std::enable_if<
 	!std::is_same<typename std::result_of<F(Args...)>::type, void>::value,

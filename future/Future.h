@@ -22,6 +22,15 @@ using TimeoutCallback = std::function<void()>;
 
 template<typename T>
 struct State {
+	/*
+	template<class T, class U>
+	struct is_same;
+	If T and U name the same type(including const/voltile qualifications, for example, 
+	char and const char are not the same type), provide the member constant
+	value equal to true. Otherwise value is false.
+
+	这个判断表示T是void或者T可以被copy construct或者可以被move construct
+	*/
 	static_assert(
 		std::is_same<T, void>::value ||
 		std::is_copy_constructible<T>() ||
@@ -37,18 +46,24 @@ struct State {
 	std::mutex thenLock_;
 
 	/*
+	从Try.h文件中的分析可以发现TryWrapper<T>::Type指的就是T真正的type，即使T是Try<T>
+	所以ValueType就是真正的value type
+	*/
 	using ValueType = typename TryWrapper<T>::Type;
 	ValueType value_;
-	std::function<void(ValueType&&)> then_;
-	*/
-	typename TryWrapper<T>::Type value_;
-	// Wraps a function that takes (typename TryWrapper<T>::Type&&) and return void
-	std::function<void (typename TryWrapper<T>::Type&&)> then_;
 
+	/*
+	ValueType是T真正的type
+	这里的std::function包裹了一个接受ValueType的右值引用并且返回void的函数
+	*/
+	std::function<void (ValueType&& )> then_;
 	Progress progress_;
 
-	// std::function<void(TimeoutCallback&&)> onTimeout_;
-	std::function<void(std::function<void()>&&)> onTimeout_;
+	/*
+	TimeoutCallback是std::function<void()>，包裹一个不接受参数返回void的函数
+	这里的std::function包裹了一个接受 不接受参数返回void的函数 为argument并且返回void的函数
+	*/
+	std::function<void(TimeoutCallback&&)> onTimeout_;
 	std::atomic<bool> retrieved_;
 };
 
@@ -254,16 +269,38 @@ public:
 	}
 
 	// 1. F does not return future type
+	/*
+	template<bool B, class T=void>
+	struct enable_if;
+
+	If B is true, std::enable_if has a public member typedef type, equal to T;
+	otherwise there is not member typedef
+	如果B为true的话，std::enable_if就有一个public的typedef叫做type，它等于T(默认为void)
+
+	R::IsReturnsFuture::value，根据这个来看，R的type应该是个CallableResult，而如果这个CallableResult
+	没有被Future包裹的话，那么特化的IsFuture是从std::false_type继承而来，也就是有一个false的typedef value
+	R::ReturnFutureType就是函数调用的结果在外面套了一个Future struct
+
+	总的来说，这个std::enable_if的意思就是如果R这个CallableResult的result type没有被Future包裹的话，就在
+	外面包裹一个Future struct；如果R这个CallableResult的result type被Future包裹了的话，std::enable_if
+	没有value这个typedef，匹配失败，进而trigger SFINAE机制
+	*/
 	template<typename F, typename R, typename... Args>
 	typename std::enable_if<!R::IsReturnsFuture::value, typename R::ReturnFutureType>::type
-	_thenImpl(Scheduler* sched, F&& f, ResultOfWrapper<F, Args...>) {
+	_ThenImpl(Scheduler* sched, F&& f, ResultOfWrapper<F, Args...>) {
 		static_assert(sizeof...(Args) <= 1, "Then must take zero/one argument");
 
+		// R应该是个CallableResult，那么R::IsReturnsFuture::Inner指的就是函数调用得到结果的type
 		using FReturnType = typename R::IsReturnsFuture::Inner;
 
 		Promise<FReturnType> pm;
 		auto nextFuture = pm.getFuture();
 
+		/*
+		std::decay<T>::type
+		把各种引用之类的修饰全部去掉，比如把const int&退化为int
+		这样可以通过std::is_same正确识别初加了引用的类型
+		*/
 		using FuncType = typename std::decay<F>::type;
 
 		std::unique_lock<std::mutex> guard(state_->thenLock_);
@@ -279,7 +316,7 @@ public:
 				t = (typename TryWrapper<T>::Type)(std::current_exception());
 			}
 
-			guard.unlock()
+			guard.unlock();
 		}
 	}
 
