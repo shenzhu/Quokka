@@ -46,14 +46,14 @@ struct State {
 	std::mutex thenLock_;
 
 	/*
-	从Try.h文件中的分析可以发现TryWrapper<T>::Type指的就是T真正的type，即使T是Try<T>
-	所以ValueType就是真正的value type
+	从Try.h文件中的分析可以发现TryWrapper<T>::Type指的是被Try包裹的T，即使T是Try<T>
+	所以ValueType就是被Try包裹的value type
 	*/
 	using ValueType = typename TryWrapper<T>::Type;
 	ValueType value_;
 
 	/*
-	ValueType是T真正的type
+	ValueType是被Try包裹的type
 	这里的std::function包裹了一个接受ValueType的右值引用并且返回void的函数
 	*/
 	std::function<void (ValueType&& )> then_;
@@ -309,14 +309,85 @@ public:
 		}
 		else if (state_->progress_ == Progress::Done) {
 			typename TryWrapper<T>::Type t;
+
 			try {
 				t = std::move(state_->value_);
 			}
 			catch (const std::exception& e) {
-				t = (typename TryWrapper<T>::Type)(std::current_exception());
+				t = (typename TryWrapper<T>::Type)(std::current_exception);
 			}
 
 			guard.unlock();
+
+			if (sched) {
+				/*
+				首先来看看这个lambda的3个init caputure都是什么
+				t是一个被Try struct包裹的T type，它的值就是当前Future state_中的value
+				f是要调用的function
+				pm是之前刚刚创建的被F(Args...)所特化的Promise
+
+				接下来在这个lambda的过程中
+				首先把f调用t的结果使用Try包裹了一下，然后将pm的value设定成这个结果type
+				*/
+				sched->schedule([t = std::move(t), f = std::forward<FuncType>(f), pm = std::move(pm)]() mutable {
+					auto result = WrapWithTry(f, std::move(t));
+					pm.setValue(std::move(result));
+				});
+			}
+			else {
+				auto result = WrapWithTry(f, std::move(t));
+				pm.setValue(std::move(result));
+			}
+		}
+		else {
+			// Set this future's then callback
+			/*
+			_setCallback接受的参数是一个lambda
+			在这个lambda的init capture中，有三个参数
+			sched，一个Scheduler的指针
+			func，传进来的function
+			prom，刚刚创建的promise
+			这个lambda接受一个参数，一个被Try struct包裹的type
+			*/
+			_setCallback(
+				[sched, func = std::forward<FuncType>(f), prom = std::move(pm)]
+				(typename TryWrapper<T>::Type&& t) mutable {
+					if (sched) {
+						sched->schedule([func = std::move(func), t = std::move(t), prom = std::move(prom)]() mutable {
+							auto result = WrapWithTry(func, std::move(t));
+							prom.setValue(std::move(result));
+						});
+					}
+					else {
+						auto result = WrapWithTry(func, std::move(t));
+						prom.setValue(std::move(result));
+					}
+				}
+			);
+		}
+
+		return std::move(nextFuture);
+	}
+
+	// 2. F return another future type
+	template<typename F, typename R, typename... Args>
+	typename std::enable_if<R::IsReturnsFuture::value, typename R::ReturnFutureType>::type
+	_ThenImpl(Scheduler* sched, F&& f, ResultOfWrapper<F, Args...>) {
+		static_assert(sizeof...(Args) <= 1, "Then must take zero/one argument");
+
+		using FReturnType = typename R::IsReturnsFuture::Inner;
+
+		Promise<FReturnType> pm;
+		auto nextFuture = pm.getFuture();
+
+		using FuncType = typename std::decay<F>::type;
+
+		std::unique_lock<std::mutex> guard(state_->thenLock_);
+		if (state_->progress_ == Progress::Timeout) {
+			throw std::runtime_error("Wrong state: Timeout");
+		}
+		else if (state_->progress_ == Progress::Done) {
+
 		}
 	}
 

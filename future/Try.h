@@ -359,13 +359,30 @@ struct TryWrapper<Try<T>> {
 Wrap function f(...) return by Try<T>
 
 先从里面的typename定义看起
-typename std::result_of<F(Args...)>::type
+typename std::result_of<F(Args...)>::type是F(Args...)的类型
+之后又在外面加了一层TryWrapper<>::Type，TryWrapper提供了一个统一的interface使得::Type
+是被Try包裹一层的真正type
+
+template<class T, class U>
+If T and U name the same type (including const/volatile qualifications), 
+provides the member constant value equal to true. Otherwise value is false
+
+接下来再看std::enable_if的条件，是判断两个type是否相等
+第一个为typename std::result_of<F(Args...)>::type, 是F(Args...)的结果类型
+第二个为void
+也就是说这个std::is_same是为了判断F(Args...)的结果类型是不是void
+
+最后再来看外层的std::enable_if，如果第一个参数为true的话，它有一个public typedef type
+也就是说这个function返回值的意思是如果F(Args...)的结果不是void的话，就用一个Try把它
+包裹起来，如果是void的话，这个函数模板无法匹配
 */
 template<typename F, typename... Args>
 typename std::enable_if<
 	!std::is_same<typename std::result_of<F(Args...)>::type, void>::value,
 	typename TryWrapper<typename std::result_of<F(Args...)>::type>::Type>::type
 WrapWithTry(F&& f, Args&& ... args) {
+
+	// 首先使用一个type alias定义F(Args...)返回值的类型
 	using Type = typename std::result_of<F(Args...)>::type;
 
 	try {
@@ -376,11 +393,15 @@ WrapWithTry(F&& f, Args&& ... args) {
 	}
 }
 
+/*
+这个函数模板与上面的比较类似
+只不过这次匹配的是F(Args...)返回值type为void的情况，使用Try struct将它包裹起来
+*/
 template<typename F, typename... Args>
 typename std::enable_if <
 	std::is_same<typename std::result_of<F(Args...)>::type, void>::value,
 	Try<void>>::type
-	WrapWithTry(F&& f, Args&& ... args) {
+WrapWithTry(F&& f, Args&& ... args) {
 	try {
 		std::forward<F>(f)(std::forward<Args>(args)...);
 		return Try<void>();
@@ -390,7 +411,13 @@ typename std::enable_if <
 	}
 }
 
+/*
+与上面的分析相似，这也是一个模板函数，但这次只接受一个参数F，也就是说这个
+function不需要参数
 
+如果F()调用结果的类型是void，那么会trigger SFINAE机制，匹配其他的模板
+如果F()调用结果的类型不是void，那么这个函数返回的是被Try包裹的F()结果类型
+*/
 template<typename F>
 typename std::enable_if<
 	!std::is_same<typename std::result_of<F()>::type, void>::value,
@@ -406,6 +433,10 @@ WrapWithTry(F&& f, Try<void>&& arg) {
 	}
 }
 
+/*
+匹配F()返回值为void的情况
+这种情况下返回被Try包裹的Try<void>
+*/
 template<typename F>
 typename std::enable_if<
 	std::is_same<typename std::result_of<F()>::type, void>::value,
