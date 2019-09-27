@@ -387,8 +387,153 @@ public:
 			throw std::runtime_error("Wrong state: Timeout");
 		}
 		else if (state_->progress_ == Progress::Done) {
+			typename TryWrapper<T>::Type t;
 
+			try {
+				t = std::move(state_->value_);
+			}
+			catch (const std::exception& e) {
+				t = decltype(t)(std::current_exception());
+			}
+
+			guard.unlock();
+
+			auto cb = [res = std::move(t), f = std::forward<FuncType>(f), prom = std::move(pm)]() mutable {
+				// func return another future: innerFuture, when innerFuture is done, nextFuture can be done
+				/*
+				这里的语法有点奇怪，其实并不是res.template，而是res.(template get<Args>()...)
+				指的是使用Args去特化get这个函数然后在res上进行调用
+				*/
+				decltype(f(res.template get<Args>()...)) innerFuture;
+				if (res.hasException()) {
+					// Failed if Args... is void
+					innerFuture = f(typename TryWrapper<typename std::decay<Args...>::type>::Type(res.exception()));
+				}
+				else {
+					innerFuture = f(res.template get<Args>()...);
+				}
+
+				if (!innerFuture.valid()) {
+					return;
+				}
+
+				std::unique_lock<std::mutex> guard(innerFuture.state_->thenLock_);
+				if (innerFuture.state_->progress_ == Progress::Timeout) {
+					throw std::runtime_error("Wrong state: Timeout");
+				}
+				else if (innerFuture.state_->progress_ == Progress::Done) {
+					typename TryWrapper<FReturnType>::Type t;
+
+					try {
+						t = std::move(innerFuture.state_->value_);
+					}
+					catch (const std::exception& e) {
+						t = decltype(t)(std::current_exception());
+					}
+
+					guard.unlock();
+					prom.setValue(std::move(t));
+				}
+				else {
+					innerFuture._setCallback([prom = std::move(prom)](typename TryWrapper<FReturnType>::Type&& t) mutable {
+						prom.setValue(std::move(t));
+					});
+				}
+			};
+
+			if (sched) {
+				sched->schedule(std::move(cb));
+			}
+			else {
+				cb();
+			}
 		}
+		else {
+			// Set this future's then callback
+			_setCallback([sched = sched, func = std::forward<FuncType>(f), prom = std::move(pm)](typename TryWrapper<T>::Type && t) mutable {
+				auto cb = [func = std::move(func), t = std::move(t), prom = std::move(prom)]() mutable {
+					// because func return another future: innerFuture, when innerFuture is done, nextFuture can be done
+					decltype(func(t.template get<Args>()...)) innerFuture;
+					if (t.hasException()) {
+						// Failed if Args... is void
+						innerFuture = func(typename TryWrapper<typename std::decay<Args...>::type>::Type(t.exception()));
+					}
+					else {
+						innerFuture = func(t.template get<Args>()...);
+					}
+
+					if (!innerFuture.valid()) {
+						return;
+					}
+					std::unique_lock<std::mutex> guard(innerFuture.state_->thenLock_);
+					if (innerFuture.state_->progress_ == Progress::Timeout) {
+						throw std::runtime_error("Wrong state : Timeout");
+					}
+					else if (innerFuture.state_->progress_ == Progress::Done) {
+						typename TryWrapper<FReturnType>::Type t;
+						try {
+							t = std::move(innerFuture.state_->value_);
+						}
+						catch (const std::exception& e) {
+							t = decltype(t)(std::current_exception());
+						}
+
+						guard.unlock();
+						prom.setValue(std::move(t));
+					}
+					else {
+						innerFuture._setCallback([prom = std::move(prom)](typename TryWrapper<FReturnType>::Type&& t) mutable {
+							prom.setValue(std::move(t));
+						});
+					}
+				};
+
+				if (sched) {
+					sched->schedule(std::move(cb));
+				}
+				else {
+					cb();
+				}
+			});
+		}
+
+		return std::move(nextFuture);
+	}
+
+	/*
+	* When register callbacks and timeout for a future like this:
+	*		Future<int> f;
+	*		f.then(xx).onTimeout(yy);
+	*
+	* There will be one future object created except f, we call f as root future.
+	* The yy callback is registered on the last future, here are the possibilities:
+	* 1. xx is called, and yy is not called
+	* 2. xx is not called, and yy is called
+	*
+	* But be careful below:
+	* 
+	*		Future<int> f;
+	*		f.then(xx).then(yy).onTimeout(zz);
+	*
+	* There will be 3 future objects created except f, we call f as root future.
+	* The zz callback is registed on the last future, here are the possiblities:
+	* 1. xx is called, and zz is called, yy is not called.
+	* 2. xx and yy are called, and zz is called, aha, it's rarely happend but...
+	* 3. xx and yy are called, it's the normal case.
+	* So, you may shouldn't use OnTimeout with chained futures!!!
+	*/
+	void onTimeout(std::chrono::milliseconds duration, std::function<void()> f, Scheduler* scheduler) {
+		scheduler->schedulerLater(duration, [state = state_, cb = std::move(f)]() mutable {
+			std::unique_lock<std::mutex> guard(state->thenLock_);
+			if (state->progress_ != Progress::None) {
+				return;
+			}
+
+			state->progress_ = Progress::Timeout;
+			guard.unlock();
+
+			cb();
+		});
 	}
 
 private:
