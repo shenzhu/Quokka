@@ -74,7 +74,7 @@ TimerId TimerManager::scheduleAfter(const Duration& duration, F&& f, Args&& ... 
 	const auto now = std::chrono::steady_clock::now();
 	return scheduleAt(now + duration,
 		std::forward<F>(f),
-		std::forward<Args>(args));
+		std::forward<Args>(args)...);
 }
 
 bool TimerManager::cancel(TimerId id) {

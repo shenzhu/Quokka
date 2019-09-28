@@ -65,9 +65,9 @@ void Time::updateTm() const {
 
 	valid_ = true;
 
-	time_t currentTime = std::chrono::system_clock::to_time_t(now_);
+    const time_t now(milliSeconds() / 1000UL);
 	// Using local time instead of UTC time
-	localtime_s(&tm_, &currentTime);
+	localtime_r(&now, &tm_);
 }
 
 inline Time::operator uint64_t () const {

@@ -149,9 +149,7 @@ private:
 };
 
 // If F returns something
-template<typename F, typename... Args,
-	typename = typename std::enable_if<!std::is_void<typename std::result_of<F(Args...)>::type>::value, void>::type,
-	typename Dummy = void>
+template<typename F, typename... Args, typename, typename>
 auto ThreadPool::execute(F && f, Args && ... args) -> Future<typename std::result_of<F(Args...)>::type> {
 	using resultType = typename std::result_of<F(Args...)>::type;
 
@@ -184,8 +182,7 @@ auto ThreadPool::execute(F && f, Args && ... args) -> Future<typename std::resul
 }
 
 // F returns void
-template<typename F, typename... Args,
-	typename = typename std::enable_if<std::is_void<typename std::result_of<F(Args...)>::type>::value, void>::type>
+template<typename F, typename... Args, typename>
 auto ThreadPool::execute(F&& f, Args&& ... args) -> Future<void> {
 	using resultType = typename std::result_of<F(Args...)>::type;
 	static_assert(std::is_void<resultType>::value, "must be void");
