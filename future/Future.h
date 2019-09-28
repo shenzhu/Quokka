@@ -248,6 +248,9 @@ private:
 	std::shared_ptr<State<T>> state_;
 };
 
+template<typename T2>
+Future<T2> makeExceptionFuture(std::exception_ptr&&);
+
 template<typename T>
 class Future {
 public:
@@ -266,6 +269,113 @@ public:
 
 	bool valid() const {
 		return state_ != nullptr;
+	}
+
+	typename State<T>::ValueType
+	wait(const std::chrono::milliseconds& timeout = std::chrono::milliseconds(24 * 3600 * 1000)) {
+		std::unique_lock<std::mutex> guard(state_->thenLock_);
+		switch (state_->progress_) {
+		case Progress::None:
+			break;
+
+		case Progress::Timeout:
+			throw std::runtime_error("Future timeout");
+
+		case Progress::Done:
+			state_->progress_ = Progress::Retrieved;
+			return std::move(state_->value_);
+
+		default:
+			throw std::runtime_error("Future already retrieved");
+		}
+		guard.unlock();
+
+		auto cond(std::make_shared<std::condition_variable>());
+		auto mutex(std::make_shared<std::mutex>());
+		bool ready = false;
+		typename State<T>::ValueType value;
+
+		this->then([
+			&value,
+			&ready,
+			wcond = std::weak_ptr<std::condition_variable>(cond),
+			wmutex = std::weak_ptr<std::mutex>(mutex)
+		](typename State<T>::ValueType&& v) {
+			auto cond = wcond.lock();
+			auto mutex = wmutex.lock();
+			if (!cond || !mutex) return;
+
+			std::unique_lock<std::mutex> guard(*mutex);
+			value = std::move(v);
+			ready = true;
+			cond->notify_one();
+		});
+
+		std::unique_lock<std::mutex> waiter(*mutex);
+		bool success = cond->wait_for(waiter, timeout, [&ready]() { return ready; });
+		if (success) {
+			return std::move(value);
+		}
+		else {
+			throw std::runtime_error("Future wait_for timeout");
+		}
+	}
+
+	// T is of type Future<InnerType>
+	template<typename SHIT = T>
+	typename std::enable_if<IsFuture<SHIT>::value, SHIT>::type
+	unwrap() {
+		using InnerType = typename IsFuture<SHIT>::Inner;
+
+		static_assert(std::is_same<SHIT, Future<InnerType>>::value, "Kidding me?");
+
+		Promise<InnerType> prom;
+		Future<InnerType> fut = prom.getFuture();
+
+		std::unique_lock<std::mutex> guard(state_->thenLock_);
+		if (state_->progress_ == Progress::Timeout) {
+			throw std::runtime_error("Wrong state: Timeout");
+		}
+		else if (state_->progress_ == Progress::Done) {
+			try {
+				auto innerFuture = std::move(state_->value_);
+				return std::move(innerFuture.value());
+			}
+			catch (const std::exception& e) {
+				return makeExceptionFuture<InnerType>(std::current_exception());
+			}
+		}
+		else {
+			_setCallback([pm = std::move(prom)](typename TryWrapper<SHIT>::Type&& innerFuture) mutable {
+				try {
+					SHIT future = std::move(innerFuture);
+					future._setCallback([pm = std::move(pm)](typename TryWrapper<InnerType>::Type&& t) mutable {
+						// No need scheduler here, think about this code:
+						// `outer.Unwrap().Then(sched, func);`
+						// outer.Unwrap() is the inner future, the below line
+						// will trigger func in sched thread.
+						pm.setValue(std::move(t));
+					});
+				}
+				catch (...) {
+					pm.setException(std::current_exception());
+				}
+			});
+		}
+
+		return fut;
+	}
+
+	template<typename F, typename R = CallableResult<F, T>>
+	auto then(F&& f) -> typename R::ReturnFutureType {
+		typedef typename R::Arg Arguments;
+		return _thenImpl<F, R>(nullptr, std::forward<F>(f), Arguments());
+	}
+
+	template<typename F, typename R = CallableResult<F, T>>
+	auto then(Scheduler* sched, F&& f) -> typename R::ReturnFutureType {
+		typedef typename R::Arg Arguments;
+		return _thenImpl<F, R>(sched, std::forward<F>(f), Arguments());
 	}
 
 	// 1. F does not return future type
@@ -287,7 +397,7 @@ public:
 	*/
 	template<typename F, typename R, typename... Args>
 	typename std::enable_if<!R::IsReturnsFuture::value, typename R::ReturnFutureType>::type
-	_ThenImpl(Scheduler* sched, F&& f, ResultOfWrapper<F, Args...>) {
+	_thenImpl(Scheduler* sched, F&& f, ResultOfWrapper<F, Args...>) {
 		static_assert(sizeof...(Args) <= 1, "Then must take zero/one argument");
 
 		// R应该是个CallableResult，那么R::IsReturnsFuture::Inner指的就是函数调用得到结果的type
@@ -372,7 +482,7 @@ public:
 	// 2. F return another future type
 	template<typename F, typename R, typename... Args>
 	typename std::enable_if<R::IsReturnsFuture::value, typename R::ReturnFutureType>::type
-	_ThenImpl(Scheduler* sched, F&& f, ResultOfWrapper<F, Args...>) {
+	_thenImpl(Scheduler* sched, F&& f, ResultOfWrapper<F, Args...>) {
 		static_assert(sizeof...(Args) <= 1, "Then must take zero/one argument");
 
 		using FReturnType = typename R::IsReturnsFuture::Inner;
@@ -548,5 +658,40 @@ private:
 
 	std::shared_ptr<State<T>> state_;
 };
+
+// Make ready future
+template<typename T2>
+inline Future<typename std::decay<T2>::type> makeReadyFuture(T2&& value) {
+	Promise<typename std::decay<T2>::type> pm;
+	auto f(pm.getFuture());
+	pm.setValue(std::forward<T2>(value));
+
+	return f;
+}
+
+inline Future<void> makeReadyFuture() {
+	Promise<void> pm;
+	auto f(pm.getFuture());
+	pm.setValue();
+
+	return f;
+}
+
+// Make exception future
+template<typename T2, typename E>
+inline Future<T2> makeExceptionFuture(E&& exp) {
+	Promise<T2> pm;
+	pm.setException(std::make_exception_ptr(std::forward<E>(exp)));
+
+	return pm.getFuture();
+}
+
+template<typename T2>
+inline Future<T2> makeExceptionFuture(std::exception_ptr&& eptr) {
+	Promise<T2> pm;
+	pm.setException(std::move(eptr));
+
+	return pm.getFuture();
+}
 
 }  // namespace Quokka
