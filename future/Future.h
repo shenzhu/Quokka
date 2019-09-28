@@ -149,11 +149,11 @@ public:
 	typename std::enable_if<!std::is_void<SHIT>::value, void>::type
 	setValue(Try<SHIT>&& t) {
 		std::unique_lock<std::mutex> guard(state_->thenLock_);
-		if (state_->progress != Progress::None) {
+		if (state_->progress_ != Progress::None) {
 			return;
 		}
 
-		state_->progress = Progress::Done;
+		state_->progress_ = Progress::Done;
 		state_->value_ = std::forward<Try<SHIT>>(t);
 
 		guard.unlock();
@@ -424,7 +424,7 @@ public:
 				t = std::move(state_->value_);
 			}
 			catch (const std::exception& e) {
-				t = (typename TryWrapper<T>::Type)(std::current_exception);
+				t = (typename TryWrapper<T>::Type)(std::current_exception());
 			}
 
 			guard.unlock();
