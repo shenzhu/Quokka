@@ -71,6 +71,11 @@ template<typename T>
 class Promise {
 public:
 
+	/*
+	使用默认的构造函数去构造state
+	在这种情况下，state的progress_会被设置成None
+	它的retrieved_会被设置成false
+	*/
 	Promise() :
 		state_(std::make_shared<State<T>>()) {
 	}
@@ -84,24 +89,42 @@ public:
 	Promise& operator=(Promise&& promise) = default;
 
 	void setException(std::exception_ptr exp) {
+		/*
+		首先用Promise的state_中的thenLock_去lock
+		接下来如果当前的Promise的state_中的progress_不为None的时候，表明state_的value_
+		已经被设置过了，这种情况下直接返回
+		*/
 		std::unique_lock<std::mutex> guard(state_->thenLock_);
 		if (state_->progress_ != Progress::None) {
 			return;
 		}
 
+		/*
+		将进行状态设置为Done
+		将value_设置为异常的指针类型
+		*/
 		state_->progress_ = Progress::Done;
 		state_->value_ = typename State<T>::ValueType(std::move(exp));
 		guard.unlock();
 
+		/*
+		如果state_的then_没有被设置，那么if它就是false，如果已经被设置这里的if就是true
+		进到if statement之后，会以state_的value_为参数调用then_函数
+		*/
 		if (state_->then_) {
 			state_->then_(std::move(state_->value_));
 		}
 	}
 
+	/*
+	这里typename SHIT = T的用法是这样的
+	不能单独使用template<typename SHIT = T>，这里的T是指代外层Promise的type T
+	*/
 	template<typename SHIT = T>
 	// template< bool B, class T = void >
 	// If B is true, std::enable_if has a public member typedef type, equal to T; otherwise
 	// there is no member typedef
+	// 
 	// 如果SHIT的type是void，那么std::is_void<SHIT>::value的返回值是true，因此enable_if的第一个参数
 	// 为false，enable_if就会不存在type
 	typename std::enable_if<!std::is_void<SHIT>::value, void>::type
@@ -131,11 +154,20 @@ public:
 	template<typename SHIT = T>
 	typename std::enable_if<!std::is_void<SHIT>::value, void>::type
 	setValue(const SHIT& t) {
+		/*
+		首先使用mutex将其lock起来
+		接着如果当前Promise的state_中的progress_不为None，表明当前的Promise已经被set过，
+		这时候返回即可
+		*/
 		std::unique_lock<std::mutex> guard(state_->thenLock_);
 		if (state_->progress_ != Progress::None) {
 			return;
 		}
 
+		/*
+		将progress_的状态设置为Done
+		设置state_的value_为传进来的参数t
+		*/
 		state_->progress_ = Progress::Done;
 		state_->value_ = t;
 
@@ -232,6 +264,14 @@ public:
 
 	Future<T> getFuture() {
 		bool expect = false;
+		/*
+		bool compare_exchange_strong(T& expected, T val, ...) ...
+		比较并交换被封装的值(strong)与参数expected所指定的值是否相等，如果：
+		相等，则用val替换原子对象的值
+		不相等，则用源自对象的旧值替换expected，因此调用该函数之后，如果被该原子对象
+		封装的值与参数expected所指定的值不相等，expected中的内容就是原子对象的旧值
+		Returns true if the underlying atomic value was successfully changed, false otherwise
+		*/
 		if (!state_->retrieved_.compare_exchange_strong(expect, true)) {
 			throw std::runtime_error("Future already retrieved");
 		}
@@ -245,6 +285,17 @@ public:
 
 private:
 
+	/*
+	首先Promise是一个模板类，需要用某个type进行特化
+	Promise含有一个指向State的指针，这个State同样是一个模板，会使用与特化Promise同样的参数类型进行特化
+	
+	State含有一些比较重要的变量
+	progress_为当前进行的进度：None, Timeout, Done或者Retrieved
+	value_为一个值，是用Try struct进行包裹的
+	then_是一个std::function
+	retrieved_表示这个State中的值有没有被取走
+	thenLock_是一个mutex
+	*/
 	std::shared_ptr<State<T>> state_;
 };
 

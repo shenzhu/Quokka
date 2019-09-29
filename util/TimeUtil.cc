@@ -67,7 +67,7 @@ void Time::updateTm() const {
 
     const time_t now(milliSeconds() / 1000UL);
 	// Using local time instead of UTC time
-	localtime_r(&now, &tm_);
+	// localtime_r(&now, &tm_);
 }
 
 inline Time::operator uint64_t () const {

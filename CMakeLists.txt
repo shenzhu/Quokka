@@ -17,6 +17,8 @@ add_executable (
 	util/TimeUtil.cc
 	util/ThreadPool.h
 	util/ThreadPool.cc
+	util/buffer.h
+	util/buffer.cc
 	future/Try.h
 	future/Scheduler.h
 	future/Helper.h

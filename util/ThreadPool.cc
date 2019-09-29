@@ -82,6 +82,7 @@ void ThreadPool::_monitorRoutine() {
 			return;
 		}
 
+		// 首先将nw设置为正在等待的线程的数量
 		auto nw = waiters_;
 
 		// If there is any pending stop signal to consume waiters
@@ -98,6 +99,7 @@ void ThreadPool::_monitorRoutine() {
 }
 
 void ThreadPool::_workerRoutine() {
+	// working_是一个thread_local的变量，表明每个thread都有一个自己的副本
 	working_ = true;
 
 	while (working_) {
@@ -113,6 +115,9 @@ void ThreadPool::_workerRoutine() {
 			optionally looping until some predicate is satisfied
 			这里给wait传了第二个参数，是一个谓词，returns false if the waiting should
 			be continued
+
+			当shutdown_了或者tasks_不为空的话(表明已经有task可以做了)停止等待
+			并且将waiter的数量-1
 			*/
 			cond_.wait(guard, [this]() {
 				return shutdown_ || !tasks_.empty();
@@ -120,6 +125,8 @@ void ThreadPool::_workerRoutine() {
 			--waiters_;
 
 			assert(shutdown_ || !tasks_.empty());
+
+			// 如果已经shutdown并且任务为空的话，就将当前thread的数量-1并返回
 			if (shutdown_ && tasks_.empty()) {
 				--currentThreads_;
 				return;
@@ -131,15 +138,21 @@ void ThreadPool::_workerRoutine() {
 		}
 
 		task();
-
-		// If reach here, this thread is reccycled by monitor thread
-		--currentThreads_;
-		--pendingStopSignal_;
 	}
+
+	// If reach here, this thread is recycled by monitor thread
+	--currentThreads_;
+	--pendingStopSignal_;
 }
 
 void ThreadPool::_spawnWorker() {
-	// Guared by mutex
+	/*
+	Guared by mutex
+
+	将当前的线程数量增加1
+	创建一个新的线程capture这个ThreadPool class本身，并且去执行_workRoutine()这个函数
+	最后将这个新创建的线程加入workers_中去
+	*/
 	++currentThreads_;
 	std::thread t([this]() {
 		this->_workerRoutine();

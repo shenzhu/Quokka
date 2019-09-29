@@ -151,16 +151,27 @@ private:
 // If F returns something
 template<typename F, typename... Args, typename, typename>
 auto ThreadPool::execute(F && f, Args && ... args) -> Future<typename std::result_of<F(Args...)>::type> {
+	// resultType为调用F(Args...)的实际类型
 	using resultType = typename std::result_of<F(Args...)>::type;
 
+	/*
+	使用当前ThreadPool class中的mutex_进行上锁
+	并且如果这个ThreadPool已经被关闭了，就以resultType的默认值创建一个可以被用的future
+	*/
 	std::unique_lock<std::mutex> guard(mutex_);
 	if (shutdown_) {
 		return makeReadyFuture<resultType>(resultType());
 	}
 
+	// 创建一个新的promise并且得到他的future
 	Promise<resultType> promise;
 	auto future = promise.getFuture();
 
+	/*
+	将args绑定到函数f上面
+	接下来创建一个新的task，它capture了之前创建的function和promise
+	在这个task中，调用t并且使用一个Try struct包裹它，接着将其设置成为promise的value
+	*/
 	auto func = std::bind(std::forward<F>(f), std::forward<Args>(args)...);
 	auto task = [t = std::move(func), pm = std::move(promise)]() mutable {
 		try {
