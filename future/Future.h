@@ -154,6 +154,7 @@ public:
 	template<typename SHIT = T>
 	typename std::enable_if<!std::is_void<SHIT>::value, void>::type
 	setValue(const SHIT& t) {
+		// 其实这个函数也是多余的，因为有注释暂时保留了
 		/*
 		首先使用mutex将其lock起来
 		接着如果当前Promise的state_中的progress_不为None，表明当前的Promise已经被set过，
@@ -170,74 +171,6 @@ public:
 		*/
 		state_->progress_ = Progress::Done;
 		state_->value_ = t;
-
-		guard.unlock();
-		if (state_->then_) {
-			state_->then_(std::move(state_->value_));
-		}
-	}
-
-	template<typename SHIT = T>
-	typename std::enable_if<!std::is_void<SHIT>::value, void>::type
-	setValue(Try<SHIT>&& t) {
-		std::unique_lock<std::mutex> guard(state_->thenLock_);
-		if (state_->progress_ != Progress::None) {
-			return;
-		}
-
-		state_->progress_ = Progress::Done;
-		state_->value_ = std::forward<Try<SHIT>>(t);
-
-		guard.unlock();
-		if (state_->then_) {
-			state_->then_(std::move(state_->value_));
-		}
-	}
-
-	template<typename SHIT = T>
-	typename std::enable_if<!std::is_void<SHIT>::value, void>::type
-	setValue(const Try<SHIT>& t) {
-		std::unique_lock<std::mutex> guard(state_->thenLock_);
-		if (state_->progress != Progress::None) {
-			return;
-		}
-
-		state_->progress = Progress::Done;
-		state_->value_ = t;
-
-		guard.unlock();
-		if (state_->then_) {
-			state_->then_(std::move(state_->value_));
-		}
-	}
-
-	template<typename SHIT = T>
-	typename std::enable_if<std::is_void<SHIT>::value, void>::type
-	setValue(Try<void>&& t) {
-		std::unique_lock<std::mutex> guard(state_->thenLock_);
-		if (state_->progress_ != Progress::None) {
-			return;
-		}
-
-		state_->progress_ = Progress::Done;
-		state_->value_ = Try<void>();
-
-		guard.unlock();
-		if (state_->then_) {
-			state_->then_(std::move(state_->value_));
-		}
-	}
-
-	template<typename SHIT = T>
-	typename std::enable_if<std::is_void<SHIT>::value, void>::type
-	setValue(const Try<void>& t) {
-		std::unique_lock<std::mutex> guard(state_->thenLock_);
-		if (state_->progress_ != Progress::None) {
-			return;
-		}
-
-		state_->progress_ = Progress::Done;
-		state_->value_ = Try<void>();
 
 		guard.unlock();
 		if (state_->then_) {
